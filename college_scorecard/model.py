@@ -26,7 +26,8 @@ def print_overall_average(file, data, name):
           (file.split('/')[-1][6:-7], name, overall_aver, aver.size))
 
 
-def get_data():
+def get_data(features):
+    data_filtered = {}
     data = {}
 
     cwd = os.getcwd()
@@ -52,50 +53,60 @@ def get_data():
             average_earnings.append((me * mc + fe * fc) / (mc + fc) if -1 not in (me, mc, fe, fc) else -1.0)
         # Convert list to numpy array
         average_earnings = np.asarray(average_earnings)
+        data['Y'] = average_earnings
         # Print overall earning average
         print_overall_average(file, average_earnings, 'earnings')
 
-        # Get SAT data
-        average_sat = get_clean_data(df['SAT_AVG_ALL'])
-        # Print overall SAT average
-        print_overall_average(file, average_sat, 'SAT')
+        for feature in features:
+            # Get feature data
+            feature_data = get_clean_data(df[feature])
+            data[feature] = feature_data
+            # Print overall feature average
+            print_overall_average(file, feature_data, feature)
 
         # Convert to dataframe
-        dataset_df = pandas.DataFrame({'X': average_sat, 'Y': average_earnings})
+        dataset_df = pandas.DataFrame(data)
         # Filter missing values
-        dataset_df_filtered = dataset_df.query('X>-1.0').query('Y>-1.0')
-        dataset_filtered = dataset_df_filtered.values
+        for col in dataset_df.columns:
+            query = '%s>-1.0' % col
+            dataset_df= dataset_df.query(query)
+        dataset_filtered = dataset_df.values
         # Skip years with no data
         if dataset_filtered.size > 0:
-            data[year] = dataset_filtered
-    return data
+            data_filtered[year] = dataset_filtered
+    return data_filtered
 
 
-dataset = get_data()
+features = ['SAT_AVG_ALL', 'SATVRMID', 'SATMTMID', 'SATWRMID']
+n_features = len(features)
+
+dataset = get_data(features)
 data = dataset['2013_14']
-X, Y = data[:, 0], data[:, 1]
+X, Y = data[:, :n_features], data[:, -1:]
 
 # Make test and train set
 train_X, test_X, train_y, test_y = train_test_split(X, Y, train_size=0.7, random_state=0)
 
-# Regression plot
-ax = sns.regplot(x='X', y='Y', data=pandas.DataFrame({'X': test_X, 'Y': test_y}))
-ax.set(xlabel='Average SAT', ylabel='Mean earnings 6 years after entry')
-plt.show()
-
 # Linear regression
 model = Sequential()
-model.add(Dense(1, input_shape=(1,), activation="linear"))
+model.add(Dense(1, input_shape=(n_features,), activation="linear"))
 model.compile(loss='mse', optimizer=keras.optimizers.Adam(lr=0.01))
 print(model.summary())
 
 # train
 history = model.fit(train_X, train_y,
                     batch_size=16,
-                    epochs=100,
+                    epochs=300,
                     verbose=1,
                     validation_data=(test_X, test_y))
 
 # Evaluate and print MSE
 score = model.evaluate(test_X, test_y, verbose=0)
 print('Test loss: %.4f' % score)
+print("Features: %s" % features)
+print("Number of examples: %d" % len(Y))
+
+# # Regression plot
+# ax = sns.regplot(x='X', y='Y', data=pandas.DataFrame({'X': test_X, 'Y': test_y}))
+# ax.set(xlabel='Average SAT', ylabel='Mean earnings 6 years after entry')
+# plt.show()
