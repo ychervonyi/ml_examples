@@ -34,25 +34,38 @@ def get_data():
     files = [cwd + '/CollegeScorecard_Raw_Data/MERGED2013_14_PP.csv']
     for file in files:
         df = pandas.read_csv(file, delimiter=',', error_bad_lines=False)
+        # Extract year from file name
         year = file.split('/')[-1][6:-7]
+        # Average earnings by male after 6 years of entry
         male_earnings = get_clean_data(df['MN_EARN_WNE_MALE1_P6'])
+        # Male count
         male_count = get_clean_data(df['COUNT_WNE_MALE1_P6'])
 
+        # Average earnings by male after 6 years of entry
         female_earnings = get_clean_data(df['MN_EARN_WNE_MALE0_P6'])
+        # Female count
         female_count = get_clean_data(df['COUNT_WNE_MALE0_P6'])
 
+        # Average earnings (female and male)
         average_earnings = []
         for (me, mc, fe, fc) in zip(male_earnings, male_count, female_earnings, female_count):
             average_earnings.append((me * mc + fe * fc) / (mc + fc) if -1 not in (me, mc, fe, fc) else -1.0)
+        # Convert list to numpy array
         average_earnings = np.asarray(average_earnings)
+        # Print overall earning average
         print_overall_average(file, average_earnings, 'earnings')
 
+        # Get SAT data
         average_sat = get_clean_data(df['SAT_AVG_ALL'])
+        # Print overall SAT average
         print_overall_average(file, average_sat, 'SAT')
 
+        # Convert to dataframe
         dataset_df = pandas.DataFrame({'X': average_sat, 'Y': average_earnings})
+        # Filter missing values
         dataset_df_filtered = dataset_df.query('X>-1.0').query('Y>-1.0')
         dataset_filtered = dataset_df_filtered.values
+        # Skip years with no data
         if dataset_filtered.size > 0:
             data[year] = dataset_filtered
     return data
@@ -65,20 +78,24 @@ X, Y = data[:, 0], data[:, 1]
 # Make test and train set
 train_X, test_X, train_y, test_y = train_test_split(X, Y, train_size=0.7, random_state=0)
 
+# Regression plot
 ax = sns.regplot(x='X', y='Y', data=pandas.DataFrame({'X': test_X, 'Y': test_y}))
 ax.set(xlabel='Average SAT', ylabel='Mean earnings 6 years after entry')
 plt.show()
 
+# Linear regression
 model = Sequential()
 model.add(Dense(1, input_shape=(1,), activation="linear"))
-
 model.compile(loss='mse', optimizer=keras.optimizers.Adam(lr=0.01))
 print(model.summary())
 
+# train
 history = model.fit(train_X, train_y,
                     batch_size=16,
                     epochs=100,
                     verbose=1,
                     validation_data=(test_X, test_y))
+
+# Evaluate and print MSE
 score = model.evaluate(test_X, test_y, verbose=0)
 print('Test loss: %.4f' % score)
