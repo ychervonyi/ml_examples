@@ -76,7 +76,8 @@ def print_overall_average(file, data, name):
 
 def print_death_rate(df, year):
     # Death rate
-    dd = {'death_rate': get_clean_data(df['DEATH_YR2_RT']), 'name': get_clean_data(df['INSTNM'], datatype='')}
+    dd = {'death_rate': get_clean_data(df['DEATH_YR2_RT']),
+          'name': get_clean_data(df['INSTNM'], datatype='')}
     dd_df = pandas.DataFrame(dd)
     dd_df.sort_values('death_rate', ascending=False, inplace = True)
     print("Year: %s" % year)
@@ -92,6 +93,7 @@ def load_model(name, type):
         loaded_model = model_from_json(loaded_model_json)
         # load weights into new model
         loaded_model.load_weights("%s.h5" % name)
+        # need to compile, otherwise it returns nonsense (such as negative values)
         loaded_model.compile(loss='mse', optimizer='adam')
         print("Loaded student model from disk")
     elif type == 'sklearn':
@@ -99,6 +101,29 @@ def load_model(name, type):
     else:
         loaded_model = None
     return loaded_model
+
+
+def compute_average_earnings(dataframe):
+    # Average earnings by male after 6 years of entry
+    male_earnings = get_clean_data(dataframe['MN_EARN_WNE_MALE1_P6'])
+    # Male count
+    male_count = get_clean_data(dataframe['COUNT_WNE_MALE1_P6'])
+
+    # Average earnings by male after 6 years of entry
+    female_earnings = get_clean_data(dataframe['MN_EARN_WNE_MALE0_P6'])
+    # Female count
+    female_count = get_clean_data(dataframe['COUNT_WNE_MALE0_P6'])
+
+    # Death rate
+    # print_death_rate(df, year)
+
+    # Average earnings (female and male)
+    average_earnings = []
+    for (me, mc, fe, fc) in zip(male_earnings, male_count, female_earnings, female_count):
+        average_earnings.append((me * mc + fe * fc) / (mc + fc) if -1 not in (me, mc, fe, fc) else -1.0)
+    # Convert list to numpy array
+    average_earnings = np.asarray(average_earnings)
+    return average_earnings
 
 
 def get_data(features):
@@ -115,25 +140,12 @@ def get_data(features):
         df = pandas.read_csv(file, delimiter=',', error_bad_lines=False)
         # Extract year from file name
         year = file.split('/')[-1][6:-7]
-        # Average earnings by male after 6 years of entry
-        male_earnings = get_clean_data(df['MN_EARN_WNE_MALE1_P6'])
-        # Male count
-        male_count = get_clean_data(df['COUNT_WNE_MALE1_P6'])
-
-        # Average earnings by male after 6 years of entry
-        female_earnings = get_clean_data(df['MN_EARN_WNE_MALE0_P6'])
-        # Female count
-        female_count = get_clean_data(df['COUNT_WNE_MALE0_P6'])
 
         # Death rate
         # print_death_rate(df, year)
 
-        # Average earnings (female and male)
-        average_earnings = []
-        for (me, mc, fe, fc) in zip(male_earnings, male_count, female_earnings, female_count):
-            average_earnings.append((me * mc + fe * fc) / (mc + fc) if -1 not in (me, mc, fe, fc) else -1.0)
-        # Convert list to numpy array
-        average_earnings = np.asarray(average_earnings)
+        # Compute earnings
+        average_earnings = compute_average_earnings(df)
         data['Y'] = average_earnings
         # Print overall earning average
         print_overall_average(file, average_earnings, 'earnings')
@@ -150,7 +162,7 @@ def get_data(features):
         # Filter missing values
         for col in dataset_df.columns:
             query = '%s>-1.0' % col
-            dataset_df= dataset_df.query(query)
+            dataset_df = dataset_df.query(query)
         dataset_filtered = dataset_df.values
         # Skip years with no data
         if dataset_filtered.size > 0:
@@ -159,6 +171,7 @@ def get_data(features):
 
 
 def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1, model_type='keras'):
+    assert model_type in ('keras', 'sklearn'), "Model type should be keras or sklearn"
     n_features = len(features)
 
     dataset = get_data(features)
@@ -175,6 +188,7 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
     else:
         # Load student model
         loaded_model = load_model('student', model_type)
+        assert loaded_model is None, "Can't load a model"
 
         X_student_features = data[:, :3]
         X = data[:, 3:n_features]
@@ -187,7 +201,6 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
     train_X, test_X, train_y, test_y = train_test_split(X, Y, train_size=0.7, random_state=0)
 
     # Linear regression
-
     if model_type == 'keras':
         # fix random seed for reproducibility
         seed = 7
@@ -195,7 +208,7 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
 
         model = Sequential()
         model.add(Dense(1, input_shape=(len(X[0]),), kernel_initializer='normal', activation="linear"))
-        model.compile(loss='mse', optimizer=keras.optimizers.Adam(lr=learning_rate))  #RMSprop(lr=0.05))  # Adam(lr=0.1)
+        model.compile(loss='mse', optimizer=keras.optimizers.Adam(lr=learning_rate))  #RMSprop(lr=0.05))
 
         # train
         history = model.fit(train_X, train_y,
@@ -228,9 +241,6 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
         model = linear_model.LinearRegression()
         model.fit(train_X, train_y)
         joblib.dump(model, '%s.pkl' % model_name)
-    else:
-        print("Specify model type!")
-        return
 
     predictions = model.predict(test_X)
     r_squared = r2_score(test_y, predictions)
