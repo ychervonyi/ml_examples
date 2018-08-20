@@ -37,11 +37,30 @@ Features: ['ADM_RATE_ALL', 'AVGFACSAL', 'TUITIONFEE_IN', 'TUITIONFEE_OUT', 'PFTF
 Number of examples: 8396
 Batch size: 200, learning rate: 0.5000
 
+
+=====================================================
+Normalized student model
+
+Coefficients:
+ [[ 25184.13366366 -44190.50648594  54903.45210942]]
+R squared: 0.4375
+Features: ['SAT_AVG_ALL', 'SATVRMID', 'SATMTMID']
+Number of examples: 8015
+
+
+Normalized school model
+
+Coefficients:
+ [[ 0.01772076  0.51360059  0.50706065 -0.58785883 -0.09126908  0.23001001]]
+R squared: 0.1199
+Features: ['SAT_AVG_ALL', 'SATVRMID', 'SATMTMID', 'ADM_RATE_ALL', 'AVGFACSAL', 'TUITIONFEE_IN', 'TUITIONFEE_OUT', 'PFTFAC', 'GRADS']
+Number of examples: 6536
+
 '''
 
 from sklearn.model_selection import train_test_split
 from keras.models import Sequential
-from keras.layers import Dense, Dropout
+from keras.layers import Dense
 # from keras.regularizers import l2
 # from keras.utils import np_utils
 import matplotlib.pyplot as plt
@@ -53,10 +72,10 @@ import glob
 import os
 import argparse
 from keras.models import model_from_json
-# import h5py
 from sklearn import linear_model
 from sklearn.metrics import r2_score
 from sklearn.externals import joblib
+from collections import OrderedDict
 
 
 def get_clean_data(column, datatype='float'):
@@ -67,11 +86,17 @@ def get_clean_data(column, datatype='float'):
     return values
 
 
-def print_overall_average(file, data, name):
-    aver = data[data != -1]
-    overall_aver = np.average(aver) if aver.size > 0 else 'No data'
-    print("Year: %s, Average %s: %s, Data points: %d" %
-          (file.split('/')[-1][6:-7], name, overall_aver, aver.size))
+def print_overall_stats(year, data, name):
+    data = data[data != -1.0]
+    n_points = data.size
+    if n_points == 0:
+        print("Year: %s, Feature: %s, No data" % (year, name))
+        return
+    overall_aver = np.average(data)
+    overall_max = np.amax(data)
+    overall_min = np.amin(data)
+    print("Year: %s, Feature: %s, Average: %s, Max %s, Min: %s, Data points: %d" %
+          (year, name, overall_aver, overall_max, overall_min, n_points))
 
 
 def print_death_rate(df, year):
@@ -95,12 +120,15 @@ def load_model(name, type):
         loaded_model.load_weights("%s.h5" % name)
         # need to compile, otherwise it returns nonsense (such as negative values)
         loaded_model.compile(loss='mse', optimizer='adam')
+        model_features = 3
         print("Loaded student model from disk")
     elif type == 'sklearn':
         loaded_model = joblib.load('%s.pkl' % name)
+        model_features = loaded_model.rank_
+        print("Loaded student model from disk")
     else:
         loaded_model = None
-    return loaded_model
+    return loaded_model, model_features
 
 
 def compute_average_earnings(dataframe):
@@ -120,7 +148,7 @@ def compute_average_earnings(dataframe):
     # Average earnings (female and male)
     average_earnings = []
     for (me, mc, fe, fc) in zip(male_earnings, male_count, female_earnings, female_count):
-        average_earnings.append((me * mc + fe * fc) / (mc + fc) if -1 not in (me, mc, fe, fc) else -1.0)
+        average_earnings.append((me * mc + fe * fc) / (mc + fc) if -1.0 not in (me, mc, fe, fc) else -1.0)
     # Convert list to numpy array
     average_earnings = np.asarray(average_earnings)
     return average_earnings
@@ -128,34 +156,35 @@ def compute_average_earnings(dataframe):
 
 def get_data(features):
     data_filtered = {}
-    data = {}
+    data = OrderedDict({})
 
     cwd = os.getcwd()
     files = sorted(glob.glob(cwd + '/CollegeScorecard_Raw_Data/*.csv'))
     # files = [cwd + '/CollegeScorecard_Raw_Data/MERGED2013_14_PP.csv']
     for file in files:
-        # Consider only data from 2xxx (previous years don't have the data we are interested in)
-        if file.split('/')[-1][6:-7].startswith('1'):
-            continue
-        df = pandas.read_csv(file, delimiter=',', error_bad_lines=False)
         # Extract year from file name
         year = file.split('/')[-1][6:-7]
 
+        # Consider only data from 2xxx (previous years don't have the data we are interested in)
+        if year.startswith('1'):
+            continue
+        df = pandas.read_csv(file, delimiter=',', error_bad_lines=False)
+
         # Death rate
         # print_death_rate(df, year)
-
-        # Compute earnings
-        average_earnings = compute_average_earnings(df)
-        data['Y'] = average_earnings
-        # Print overall earning average
-        print_overall_average(file, average_earnings, 'earnings')
 
         for feature in features:
             # Get feature data
             feature_data = get_clean_data(df[feature])
             data[feature] = feature_data
             # Print overall feature average
-            print_overall_average(file, feature_data, feature)
+            print_overall_stats(year, feature_data, feature)
+
+        # Compute earnings
+        average_earnings = compute_average_earnings(df)
+        data['Y'] = average_earnings
+        # Print overall earning average
+        print_overall_stats(year, average_earnings, 'EARNINGS')
 
         # Convert to dataframe
         dataset_df = pandas.DataFrame(data)
@@ -164,9 +193,15 @@ def get_data(features):
             query = '%s>-1.0' % col
             dataset_df = dataset_df.query(query)
         dataset_filtered = dataset_df.values
+
         # Skip years with no data
         if dataset_filtered.size > 0:
             data_filtered[year] = dataset_filtered
+            print("Data after filtering")
+            for c in range(dataset_filtered.shape[1]):
+                feature_name = features[c] if c < len(features) else "EARNINGS"
+                print_overall_stats(year, dataset_filtered[:, c], feature_name)
+
     return data_filtered
 
 
@@ -182,20 +217,31 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
         else:
             data = np.concatenate((data, value), axis=0)
 
+    # Normalize - min max normalization. Don't normalize earnings
+    for c in range(data.shape[1] - 1):
+        col = data[:, c]
+        col_max, col_min = np.amax(col), np.amin(col)
+        feature_name = features[c] if c < len(features) else "EARNINGS"
+        print("Feature: %s, max: %.4f, min: %.4f" % (feature_name, col_max, col_min))
+        data[:, c] = (col - col_min)/(col_max - col_min)
+
+    loaded_model_n_features = 0
     # Load student model if building a school model
     if model_name == 'student':
         X, Y = data[:, :n_features], data[:, -1:]
     else:
         # Load student model
-        loaded_model = load_model('student', model_type)
-        assert loaded_model is None, "Can't load a model"
+        loaded_model, loaded_model_n_features = load_model('student', model_type)
+        assert loaded_model is not None, "Can't load a model"
 
-        X_student_features = data[:, :3]
-        X = data[:, 3:n_features]
+        X_student_features = data[:, :loaded_model_n_features]
+        X = data[:, loaded_model_n_features:n_features]
         Y_raw = data[:, -1:]
 
         Y_student_predicted = loaded_model.predict(X_student_features)
         Y = np.divide(Y_raw, Y_student_predicted)
+
+    features_used = features[loaded_model_n_features:n_features]
 
     # Make test and train set
     train_X, test_X, train_y, test_y = train_test_split(X, Y, train_size=0.7, random_state=0)
@@ -241,6 +287,7 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
         model = linear_model.LinearRegression()
         model.fit(train_X, train_y)
         joblib.dump(model, '%s.pkl' % model_name)
+        print("Saved model to disk")
 
     predictions = model.predict(test_X)
     r_squared = r2_score(test_y, predictions)
@@ -248,15 +295,15 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
     if model_type == 'keras':
         print("Model weights: %s" % model.get_weights())
         print(model.summary())
+        print("Batch size: %d, learning rate: %.4f" % (batch, learning_rate))
 
     elif model_type == 'sklearn':
         # The coefficients
         print('Coefficients: \n', model.coef_)
 
     print("R squared: %.4f" % r_squared)
-    print("Features: %s" % features)
+    print("Features: %s" % features_used)
     print("Number of examples: %d" % len(Y))
-    print("Batch size: %d, learning rate: %.4f" % (batch, learning_rate))
 
     # # Regression plot
     # ax = sns.regplot(x='X', y='Y', data=pandas.DataFrame({'X': test_X, 'Y': test_y}))
@@ -287,9 +334,9 @@ if __name__ == '__main__':
         'TUITIONFEE_IN',  # In-state tuition and fees
         'TUITIONFEE_OUT',  # Out-of-state tuition and fees
         'PFTFAC',  # Proportion of faculty that is full-time
-        'ICLEVEL',  # Level of institution
+        # 'ICLEVEL',  # Level of institution
         'GRADS',  # Number of graduate students
-        'CONTROL',  # Control of institution (public, private nonprofit, public for profit)
+        # 'CONTROL',  # Control of institution (public, private nonprofit, public for profit)
     ]
 
     if args.stage == 'student':
