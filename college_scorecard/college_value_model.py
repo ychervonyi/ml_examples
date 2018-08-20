@@ -39,6 +39,10 @@ Batch size: 200, learning rate: 0.5000
 
 
 =====================================================
+=====================================================
+
+SKlearn models:
+=====================================================
 Normalized student model
 
 Coefficients:
@@ -51,9 +55,9 @@ Number of examples: 8015
 Normalized school model
 
 Coefficients:
- [[ 0.01772076  0.51360059  0.50706065 -0.58785883 -0.09126908  0.23001001]]
-R squared: 0.1199
-Features: ['SAT_AVG_ALL', 'SATVRMID', 'SATMTMID', 'ADM_RATE_ALL', 'AVGFACSAL', 'TUITIONFEE_IN', 'TUITIONFEE_OUT', 'PFTFAC', 'GRADS']
+ [[ 0.01450093  0.50687372  0.50111331 -0.58039551 -0.09158081  0.219488  ]]
+R squared: 0.1391
+Features: ['ADM_RATE_ALL', 'AVGFACSAL', 'TUITIONFEE_IN', 'TUITIONFEE_OUT', 'PFTFAC', 'GRADS']
 Number of examples: 6536
 
 '''
@@ -78,8 +82,10 @@ from sklearn.externals import joblib
 from collections import OrderedDict
 
 
+# Set seed for reproducibility
 SEED = 7
 np.random.seed(SEED)
+
 
 class Model(object):
     def __init__(self, model_type, model_name, n_features=None, params=None):
@@ -142,7 +148,6 @@ class Model(object):
             plt.xlabel('epoch')
             plt.legend(['train', 'test'], loc='upper left')
             plt.draw()
-            plt.show()
 
             # Evaluate and print MSE
             score = self._model.evaluate(test_X, test_y, verbose=0)
@@ -167,7 +172,7 @@ class Model(object):
         return self._model.predict(x)
 
     def print(self):
-        print("Model")
+        print("Model parameters:")
         if self._type == 'keras':
             print("Model weights: %s" % self._model.get_weights())
             print(self._model.summary())
@@ -234,6 +239,7 @@ def compute_average_earnings(dataframe):
 
 def get_data(features):
     data_filtered = {}
+    # We need ordered dict to keep order of features
     data = OrderedDict({})
 
     cwd = os.getcwd()
@@ -289,6 +295,7 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
     n_features = len(features)
 
     # Merge data over multiple years
+    print("Reading data...")
     dataset = get_data(features)
     data = None
     for key, value in dataset.items():
@@ -298,6 +305,7 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
             data = np.concatenate((data, value), axis=0)
 
     # Normalize - min max normalization. Don't normalize earnings
+    print("Normalizing...")
     for c in range(data.shape[1] - 1):
         col = data[:, c]
         col_max, col_min = np.amax(col), np.amin(col)
@@ -311,6 +319,7 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
         X, Y = data[:, :n_features], data[:, -1:]
     else:
         # Load student model
+        print("Loading student model...")
         student_model = Model(model_type=model_type, model_name='student')
         student_model.load()
         loaded_model_n_features = student_model.n_features
@@ -328,6 +337,7 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
     # Make test and train set
     train_X, test_X, train_y, test_y = train_test_split(X, Y, train_size=0.7, random_state=0)
 
+    print("Training %s model..." % model_name)
     model = Model(model_type=model_type, model_name=model_name, n_features=len(features_used), params=params)
     model.create()
     model.train(train_X, train_y, test_X, test_y)
@@ -345,14 +355,13 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
     # # Regression plot
     # ax = sns.regplot(x='X', y='Y', data=pandas.DataFrame({'X': test_X, 'Y': test_y}))
     # ax.set(xlabel='Average SAT', ylabel='Mean earnings 6 years after entry')
-    # plt.show()
     return
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--stage', type=str, required=True)
+    parser.add_argument('--model_type', type=str, default='sklearn')
+    parser.add_argument('--stage', type=str, default='all')
     parser.add_argument('--epochs', type=int, default=300)
-    parser.add_argument('--model_type', type=str, default='keras')
     args = parser.parse_args()
 
     features_student = [
@@ -376,13 +385,13 @@ if __name__ == '__main__':
         # 'CONTROL',  # Control of institution (public, private nonprofit, public for profit)
     ]
 
-    if args.stage == 'student':
+    if args.stage in ('student', 'all'):
         # Student model
-        train_model(features_student, model_name=args.stage, batch=16, n_epochs=args.epochs,
+        train_model(features_student, model_name='student', batch=16, n_epochs=args.epochs,
                     learning_rate=0.1, model_type=args.model_type)
-    elif args.stage == 'school':
+    if args.stage in ('school', 'all' ):
         # School model
         features = features_student + features_college
-        train_model(features, model_name=args.stage, batch=200, n_epochs=args.epochs,
+        train_model(features, model_name='school', batch=200, n_epochs=args.epochs,
                     learning_rate=0.001, model_type=args.model_type)
     plt.show()
