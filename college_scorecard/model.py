@@ -78,6 +78,105 @@ from sklearn.externals import joblib
 from collections import OrderedDict
 
 
+SEED = 7
+np.random.seed(SEED)
+
+class Model(object):
+    def __init__(self, model_type, model_name, n_features=None, params=None):
+        assert model_type in ('sklearn', 'keras')
+        self._type = model_type
+        self._n_features = n_features
+        self._model_name = model_name
+        self._model = None
+
+        self._params = params
+
+    @property
+    def n_features(self):
+        return self._n_features
+
+    @property
+    def type(self):
+        return self._type
+
+    def create(self):
+        if self._type == 'keras':
+            model = Sequential()
+            model.add(Dense(1, input_shape=(self._n_features,), kernel_initializer='normal', activation="linear"))
+            model.compile(loss='mse', optimizer=keras.optimizers.Adam(lr=self._params['learning_rate']))  # RMSprop(lr=0.05))
+            self._model = model
+        elif self._type == 'sklearn':
+            model = linear_model.LinearRegression()
+            self._model = model
+
+    def load(self):
+        if self._type == 'keras':
+            json_file = open('%s.json' % self._model_name, 'r')
+            loaded_model_json = json_file.read()
+            json_file.close()
+            loaded_model = model_from_json(loaded_model_json)
+            # load weights into new model
+            loaded_model.load_weights("%s.h5" % self._model_name)
+            # need to compile, otherwise it returns nonsense (such as negative values)
+            loaded_model.compile(loss='mse', optimizer='adam')
+            self._n_features = 3
+        elif self._type == 'sklearn':
+            self._model = joblib.load('%s.pkl' % self._model_name)
+            self._n_features = self._model.rank_
+        print("Loaded %s model from disk" % self._model_name)
+
+    def train(self, train_X, train_y, test_X, test_y):
+        if self._type == 'keras':
+            history = self._model.fit(train_X, train_y,
+                                      batch_size=self._params['batch'],
+                                      epochs=self._params['epochs'],
+                                      verbose=1,
+                                      validation_data=(test_X, test_y)
+                                      )
+
+            # summarize history for loss
+            plt.plot(history.history['loss'])
+            plt.plot(history.history['val_loss'])
+            plt.title('model loss')
+            plt.ylabel('loss')
+            plt.xlabel('epoch')
+            plt.legend(['train', 'test'], loc='upper left')
+            plt.draw()
+            plt.show()
+
+            # Evaluate and print MSE
+            score = self._model.evaluate(test_X, test_y, verbose=0)
+            print("Test loss: %.4f" % score)
+        elif self._type == 'sklearn':
+            self._model.fit(train_X, train_y)
+        print("%s model trained" % self._model_name)
+
+    def save(self):
+        if self._type == 'keras':
+            # serialize model to JSON
+            model_json = self._model.to_json()
+            with open("%s.json" % self._model_name, "w") as json_file:
+                json_file.write(model_json)
+            # serialize weights to HDF5
+            self._model.save_weights("%s.h5" % self._model_name)
+        elif self._type == 'sklearn':
+            joblib.dump(self._model, '%s.pkl' % self._model_name)
+        print("Saved model to disk")
+
+    def predict(self, x):
+        return self._model.predict(x)
+
+    def print(self):
+        print("Model")
+        if self._type == 'keras':
+            print("Model weights: %s" % self._model.get_weights())
+            print(self._model.summary())
+            print("Params: %s" % self._params)
+        elif self._type == 'sklearn':
+            print('Coefficients: \n', self._model.coef_)
+
+
+
 def get_clean_data(column, datatype='float'):
     # Replace bad values with -1
     column.replace('PrivacySuppressed', -1, inplace=True)
@@ -108,27 +207,6 @@ def print_death_rate(df, year):
     print("Year: %s" % year)
     print("Death rate")
     print(dd_df.head(50))
-
-
-def load_model(name, type):
-    if type == 'keras':
-        json_file = open('%s.json' % name, 'r')
-        loaded_model_json = json_file.read()
-        json_file.close()
-        loaded_model = model_from_json(loaded_model_json)
-        # load weights into new model
-        loaded_model.load_weights("%s.h5" % name)
-        # need to compile, otherwise it returns nonsense (such as negative values)
-        loaded_model.compile(loss='mse', optimizer='adam')
-        model_features = 3
-        print("Loaded student model from disk")
-    elif type == 'sklearn':
-        loaded_model = joblib.load('%s.pkl' % name)
-        model_features = loaded_model.rank_
-        print("Loaded student model from disk")
-    else:
-        loaded_model = None
-    return loaded_model, model_features
 
 
 def compute_average_earnings(dataframe):
@@ -207,8 +285,10 @@ def get_data(features):
 
 def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1, model_type='keras'):
     assert model_type in ('keras', 'sklearn'), "Model type should be keras or sklearn"
+    params = {'batch': batch, 'epochs': n_epochs, 'learning_rate': learning_rate}
     n_features = len(features)
 
+    # Merge data over multiple years
     dataset = get_data(features)
     data = None
     for key, value in dataset.items():
@@ -226,19 +306,21 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
         data[:, c] = (col - col_min)/(col_max - col_min)
 
     loaded_model_n_features = 0
-    # Load student model if building a school model
+    # Load student model if we are building a school model
     if model_name == 'student':
         X, Y = data[:, :n_features], data[:, -1:]
     else:
         # Load student model
-        loaded_model, loaded_model_n_features = load_model('student', model_type)
-        assert loaded_model is not None, "Can't load a model"
+        student_model = Model(model_type=model_type, model_name='student')
+        student_model.load()
+        loaded_model_n_features = student_model.n_features
+        assert student_model is not None, "Can't load a model"
 
         X_student_features = data[:, :loaded_model_n_features]
         X = data[:, loaded_model_n_features:n_features]
         Y_raw = data[:, -1:]
 
-        Y_student_predicted = loaded_model.predict(X_student_features)
+        Y_student_predicted = student_model.predict(X_student_features)
         Y = np.divide(Y_raw, Y_student_predicted)
 
     features_used = features[loaded_model_n_features:n_features]
@@ -246,60 +328,15 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
     # Make test and train set
     train_X, test_X, train_y, test_y = train_test_split(X, Y, train_size=0.7, random_state=0)
 
-    # Linear regression
-    if model_type == 'keras':
-        # fix random seed for reproducibility
-        seed = 7
-        np.random.seed(seed)
-
-        model = Sequential()
-        model.add(Dense(1, input_shape=(len(X[0]),), kernel_initializer='normal', activation="linear"))
-        model.compile(loss='mse', optimizer=keras.optimizers.Adam(lr=learning_rate))  #RMSprop(lr=0.05))
-
-        # train
-        history = model.fit(train_X, train_y,
-                            batch_size=batch,
-                            epochs=n_epochs,
-                            verbose=1,
-                            validation_data=(test_X, test_y))
-
-        # summarize history for loss
-        plt.plot(history.history['loss'])
-        plt.plot(history.history['val_loss'])
-        plt.title('model loss')
-        plt.ylabel('loss')
-        plt.xlabel('epoch')
-        plt.legend(['train', 'test'], loc='upper left')
-        plt.draw()
-
-        # Evaluate and print MSE
-        score = model.evaluate(test_X, test_y, verbose=0)
-        print("Test loss: %.4f" % score)
-
-        # serialize model to JSON
-        model_json = model.to_json()
-        with open("%s.json" % model_name, "w") as json_file:
-            json_file.write(model_json)
-        # serialize weights to HDF5
-        model.save_weights("%s.h5" % model_name)
-        print("Saved model to disk")
-    elif model_type == 'sklearn':
-        model = linear_model.LinearRegression()
-        model.fit(train_X, train_y)
-        joblib.dump(model, '%s.pkl' % model_name)
-        print("Saved model to disk")
+    model = Model(model_type=model_type, model_name=model_name, n_features=len(features_used), params=params)
+    model.create()
+    model.train(train_X, train_y, test_X, test_y)
+    model.save()
 
     predictions = model.predict(test_X)
     r_squared = r2_score(test_y, predictions)
 
-    if model_type == 'keras':
-        print("Model weights: %s" % model.get_weights())
-        print(model.summary())
-        print("Batch size: %d, learning rate: %.4f" % (batch, learning_rate))
-
-    elif model_type == 'sklearn':
-        # The coefficients
-        print('Coefficients: \n', model.coef_)
+    model.print()
 
     print("R squared: %.4f" % r_squared)
     print("Features: %s" % features_used)
