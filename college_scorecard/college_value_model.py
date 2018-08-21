@@ -60,6 +60,25 @@ R squared: 0.1391
 Features: ['ADM_RATE_ALL', 'AVGFACSAL', 'TUITIONFEE_IN', 'TUITIONFEE_OUT', 'PFTFAC', 'GRADS']
 Number of examples: 6536
 
+========================================================
+========================================================
+========================================================
+Student
+
+Coefficients:
+ [[ 24015.16214753 -38067.33598875  49576.11901732]]
+R squared: 0.4168
+Features: ['SAT_AVG_ALL', 'SATVRMID', 'SATMTMID']
+Number of examples: 8015
+
+School
+
+Coefficients:
+ [[ 0.00531457  0.62648126  0.13472429 -0.34972506 -0.08036843  0.20757095
+  -0.07208384  0.03475412  0.03732971]]
+R squared: 0.1405
+Features: ['ADM_RATE_ALL', 'AVGFACSAL', 'TUITIONFEE_IN', 'TUITIONFEE_OUT', 'PFTFAC', 'GRADS', 'CONTROL']
+Number of examples: 6536
 '''
 
 from sklearn.model_selection import train_test_split
@@ -83,7 +102,7 @@ from collections import OrderedDict
 
 
 # Set seed for reproducibility
-SEED = 7
+SEED = 42
 np.random.seed(SEED)
 
 
@@ -112,7 +131,7 @@ class Model(object):
             model.compile(loss='mse', optimizer=keras.optimizers.Adam(lr=self._params['learning_rate']))  # RMSprop(lr=0.05))
             self._model = model
         elif self._type == 'sklearn':
-            model = linear_model.LinearRegression()
+            model = linear_model.Ridge()
             self._model = model
 
     def load(self):
@@ -125,10 +144,10 @@ class Model(object):
             loaded_model.load_weights("%s.h5" % self._model_name)
             # need to compile, otherwise it returns nonsense (such as negative values)
             loaded_model.compile(loss='mse', optimizer='adam')
-            self._input_shape = 3
+            self._input_shape = self.get_n_coefs()
         elif self._type == 'sklearn':
             self._model = joblib.load('%s.pkl' % self._model_name)
-            self._input_shape = self._model.rank_
+            self._input_shape = self.get_n_coefs()
         print("Loaded %s model from disk" % self._model_name)
 
     def train(self, train_X, train_y, test_X, test_y):
@@ -156,6 +175,14 @@ class Model(object):
             self._model.fit(train_X, train_y)
         print("%s model trained" % self._model_name)
 
+    def get_n_coefs(self):
+        n_coefs = None
+        if self._type == 'keras':
+            n_coefs = self._model.get_weights()
+        elif self._type == 'sklearn':
+            n_coefs = self._model.coef_.shape[1]
+        return n_coefs
+
     def save(self):
         if self._type == 'keras':
             # serialize model to JSON
@@ -172,13 +199,15 @@ class Model(object):
         return self._model.predict(x)
 
     def print(self):
-        print("Model parameters:")
+        print("============================================")
+        print("Model")
         if self._type == 'keras':
             print("Model weights: %s" % self._model.get_weights())
             print(self._model.summary())
             print("Params: %s" % self._params)
         elif self._type == 'sklearn':
             print('Coefficients: \n', self._model.coef_)
+        print("============================================")
 
 
 
