@@ -238,6 +238,8 @@ def compute_average_earnings(dataframe):
 
 
 def df_feature_into_onehot(df, feature_name):
+    if feature_name not in df:
+        return df, None
     # Get index of feature
     one_hot_index = df.columns.get_loc(feature_name)
     # Split dataframe into 3
@@ -327,10 +329,15 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
         print("Feature: %s, max: %.4f, min: %.4f" % (feature_name, col_max, col_min))
         data[:, c] = (col - col_min)/(col_max - col_min)
 
+        # col = data[:, c]
+        # col_max, col_min = np.amax(col), np.amin(col)
+        # print("After. Feature: %s, max: %.4f, min: %.4f" % (feature_name, col_max, col_min))
+
     loaded_model_n_features = 0
     # Load student model if we are building a school model
     if model_name == 'student':
-        X, Y = data[:, 1:], data[:, 0]
+        # Trick to make a column vector
+        X, Y = data[:, 1:], data[:, 0].reshape((-1, 1))
     else:
         # Load student model
         print("Loading student model...")
@@ -341,7 +348,8 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
 
         X_student_features = data[:, 1:loaded_model_n_features + 1]
         X = data[:, loaded_model_n_features + 1:]
-        Y_raw = data[:, 0]
+        # Trick to make a column vector
+        Y_raw = data[:, 0].reshape((-1, 1))
 
         Y_student_predicted = student_model.predict(X_student_features)
         Y = np.divide(Y_raw, Y_student_predicted)
