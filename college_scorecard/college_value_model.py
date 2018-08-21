@@ -88,18 +88,18 @@ np.random.seed(SEED)
 
 
 class Model(object):
-    def __init__(self, model_type, model_name, n_features=None, params=None):
+    def __init__(self, model_type, model_name, input_shape=None, params=None):
         assert model_type in ('sklearn', 'keras')
         self._type = model_type
-        self._n_features = n_features
+        self._input_shape = input_shape
         self._model_name = model_name
         self._model = None
 
         self._params = params
 
     @property
-    def n_features(self):
-        return self._n_features
+    def input_shape(self):
+        return self._input_shape
 
     @property
     def type(self):
@@ -108,7 +108,7 @@ class Model(object):
     def create(self):
         if self._type == 'keras':
             model = Sequential()
-            model.add(Dense(1, input_shape=(self._n_features,), kernel_initializer='normal', activation="linear"))
+            model.add(Dense(1, input_shape=(self._input_shape,), kernel_initializer='normal', activation="linear"))
             model.compile(loss='mse', optimizer=keras.optimizers.Adam(lr=self._params['learning_rate']))  # RMSprop(lr=0.05))
             self._model = model
         elif self._type == 'sklearn':
@@ -125,10 +125,10 @@ class Model(object):
             loaded_model.load_weights("%s.h5" % self._model_name)
             # need to compile, otherwise it returns nonsense (such as negative values)
             loaded_model.compile(loss='mse', optimizer='adam')
-            self._n_features = 3
+            self._input_shape = 3
         elif self._type == 'sklearn':
             self._model = joblib.load('%s.pkl' % self._model_name)
-            self._n_features = self._model.rank_
+            self._input_shape = self._model.rank_
         print("Loaded %s model from disk" % self._model_name)
 
     def train(self, train_X, train_y, test_X, test_y):
@@ -237,6 +237,18 @@ def compute_average_earnings(dataframe):
     return average_earnings
 
 
+def df_feature_into_onehot(df, feature_name):
+    # Get index of feature
+    one_hot_index = df.columns.get_loc(feature_name)
+    # Split dataframe into 3
+    dfs = np.split(df, [one_hot_index, one_hot_index + 1], axis=1)
+    # Transform feature into str type
+    f = dfs[1].astype(np.int8).astype(str)
+    # Transform feature into onehot
+    f_onehot = pandas.get_dummies(f, prefix='', prefix_sep='')
+    return pandas.concat([dfs[0], f_onehot, dfs[2]], axis=1), len(f_onehot.columns)
+
+
 def get_data(features):
     data_filtered = {}
     # We need ordered dict to keep order of features
@@ -257,6 +269,12 @@ def get_data(features):
         # Death rate
         # print_death_rate(df, year)
 
+        # Compute earnings
+        average_earnings = compute_average_earnings(df)
+        data['Y'] = average_earnings
+        # Print overall earning average
+        print_overall_stats(year, average_earnings, 'EARNINGS')
+
         for feature in features:
             # Get feature data
             feature_data = get_clean_data(df[feature])
@@ -264,28 +282,24 @@ def get_data(features):
             # Print overall feature average
             print_overall_stats(year, feature_data, feature)
 
-        # Compute earnings
-        average_earnings = compute_average_earnings(df)
-        data['Y'] = average_earnings
-        # Print overall earning average
-        print_overall_stats(year, average_earnings, 'EARNINGS')
-
         # Convert to dataframe
         dataset_df = pandas.DataFrame(data)
         # Filter missing values
         for col in dataset_df.columns:
             query = '%s>-1.0' % col
             dataset_df = dataset_df.query(query)
+
+        dataset_df, one_hot_width = df_feature_into_onehot(dataset_df, 'CONTROL')
+
         dataset_filtered = dataset_df.values
 
         # Skip years with no data
         if dataset_filtered.size > 0:
             data_filtered[year] = dataset_filtered
             print("Data after filtering")
-            for c in range(dataset_filtered.shape[1]):
-                feature_name = features[c] if c < len(features) else "EARNINGS"
+            for c in range(1, dataset_filtered.shape[1]):
+                feature_name = features[c - 1] if c < len(features) + 1 else features[-1]
                 print_overall_stats(year, dataset_filtered[:, c], feature_name)
-
     return data_filtered
 
 
@@ -306,39 +320,39 @@ def train_model(features, model_name, batch=16, n_epochs=300, learning_rate=0.1,
 
     # Normalize - min max normalization. Don't normalize earnings
     print("Normalizing...")
-    for c in range(data.shape[1] - 1):
+    for c in range(1, data.shape[1]):
         col = data[:, c]
         col_max, col_min = np.amax(col), np.amin(col)
-        feature_name = features[c] if c < len(features) else "EARNINGS"
+        feature_name = features[c - 1] if c < len(features) + 1 else features[-1]
         print("Feature: %s, max: %.4f, min: %.4f" % (feature_name, col_max, col_min))
         data[:, c] = (col - col_min)/(col_max - col_min)
 
     loaded_model_n_features = 0
     # Load student model if we are building a school model
     if model_name == 'student':
-        X, Y = data[:, :n_features], data[:, -1:]
+        X, Y = data[:, 1:], data[:, 0]
     else:
         # Load student model
         print("Loading student model...")
         student_model = Model(model_type=model_type, model_name='student')
         student_model.load()
-        loaded_model_n_features = student_model.n_features
+        loaded_model_n_features = student_model.input_shape
         assert student_model is not None, "Can't load a model"
 
-        X_student_features = data[:, :loaded_model_n_features]
-        X = data[:, loaded_model_n_features:n_features]
-        Y_raw = data[:, -1:]
+        X_student_features = data[:, 1:loaded_model_n_features + 1]
+        X = data[:, loaded_model_n_features + 1:]
+        Y_raw = data[:, 0]
 
         Y_student_predicted = student_model.predict(X_student_features)
         Y = np.divide(Y_raw, Y_student_predicted)
 
-    features_used = features[loaded_model_n_features:n_features]
+    features_used = features[loaded_model_n_features:]
 
     # Make test and train set
     train_X, test_X, train_y, test_y = train_test_split(X, Y, train_size=0.7, random_state=0)
 
     print("Training %s model..." % model_name)
-    model = Model(model_type=model_type, model_name=model_name, n_features=len(features_used), params=params)
+    model = Model(model_type=model_type, model_name=model_name, input_shape=X.shape[1], params=params)
     model.create()
     model.train(train_X, train_y, test_X, test_y)
     model.save()
@@ -382,14 +396,14 @@ if __name__ == '__main__':
         'PFTFAC',  # Proportion of faculty that is full-time
         # 'ICLEVEL',  # Level of institution
         'GRADS',  # Number of graduate students
-        # 'CONTROL',  # Control of institution (public, private nonprofit, public for profit)
+        'CONTROL',  # Control of institution (public, private nonprofit, public for profit)
     ]
 
     if args.stage in ('student', 'all'):
         # Student model
         train_model(features_student, model_name='student', batch=16, n_epochs=args.epochs,
                     learning_rate=0.1, model_type=args.model_type)
-    if args.stage in ('school', 'all' ):
+    if args.stage in ('school', 'all'):
         # School model
         features = features_student + features_college
         train_model(features, model_name='school', batch=200, n_epochs=args.epochs,
